@@ -1,61 +1,86 @@
 const express = require('express');
 const http = require('http');
 const WebSocket = require('ws');
-const { createClient, LiveTranscriptionEvents } = require('@deepgram/sdk');
+const Groq = require('groq-sdk');
 
 const app = express();
 const server = http.createServer(app);
 const wss = new WebSocket.Server({ server });
 
 const SECRET_KEY = "Prakash360";
+// Dynamic Environment Variable (Safe Way)
+const GROQ_API_KEY = process.env.GROQ_API_KEY;
 
-// Yahan apni wahi copied API Key daalein (Spaces ka dhyan rakhein)
-const DEEPGRAM_API_KEY = "afc00946e5652af1e454c83466c42efa5bdcfe2d";
+const groq = new Groq({ apiKey: GROQ_API_KEY });
 
-const deepgram = createClient(DEEPGRAM_API_KEY);
-
-let deepgramLive = null;
 let esp32Socket = null;
+let pcmAudioBuffer = [];
+const BUFFER_TARGET_SIZE = 48000; // ~1.5 Seconds of 16kHz PCM Audio
+let isProcessing = false;
 
-function startDeepgramStream() {
-  if (deepgramLive) return;
+// PCM Data ko Groq-compatible WAV Buffer mein convert karne ka function
+function createWavBuffer(pcmData) {
+  const dataLength = pcmData.length;
+  const wavBuffer = Buffer.alloc(44 + dataLength);
 
-  deepgramLive = deepgram.listen.live({
-    model: "nova-2",
-    language: "hi-Latn", 
-    smart_format: true,
-    encoding: "linear16",
-    sample_rate: 16000,
-    channels: 1
-  });
+  // RIFF Header
+  wavBuffer.write('RIFF', 0);
+  wavBuffer.writeUInt32LE(36 + dataLength, 4);
+  wavBuffer.write('WAVE', 8);
 
-  deepgramLive.on(LiveTranscriptionEvents.Open, () => {
-    console.log("🟢 Deepgram Realtime Engine Ready!");
-  });
+  // Subchunk1: fmt (PCM Specification)
+  wavBuffer.write('fmt ', 12);
+  wavBuffer.writeUInt32LE(16, 16); 
+  wavBuffer.writeUInt16LE(1, 20);  // AudioFormat = 1 (Linear PCM)
+  wavBuffer.writeUInt16LE(1, 22);  // Channels = 1 (Mono)
+  wavBuffer.writeUInt32LE(16000, 24); // Sample Rate = 16000Hz
+  wavBuffer.writeUInt32LE(32000, 28); // Byte Rate (16000 * 1 * 2)
+  wavBuffer.writeUInt16LE(2, 32);  // Block Align
+  wavBuffer.writeUInt16LE(16, 34); // Bits Per Sample = 16
 
-  deepgramLive.on(LiveTranscriptionEvents.Transcript, (data) => {
-    const transcript = data.channel.alternatives[0].transcript;
-    if (transcript && transcript.trim() !== "") {
-      console.log("Spoken Text:", transcript);
-      
-      if (esp32Socket && esp32Socket.readyState === WebSocket.OPEN) {
-        esp32Socket.send(JSON.stringify({
-          type: "stt_text",
-          text: transcript,
-          is_final: data.is_final
-        }));
-      }
+  // Subchunk2: data
+  wavBuffer.write('data', 36);
+  wavBuffer.writeUInt32LE(dataLength, 40);
+
+  // Copy raw PCM audio bytes
+  pcmData.copy(wavBuffer, 44);
+  return wavBuffer;
+}
+
+// Groq Whisper API Call Handler
+async function processAudioWithGroq() {
+  if (pcmAudioBuffer.length === 0 || isProcessing) return;
+
+  isProcessing = true;
+  const rawPcm = Buffer.concat(pcmAudioBuffer);
+  pcmAudioBuffer = []; 
+
+  try {
+    const wavBuffer = createWavBuffer(rawPcm);
+    const audioFile = await Groq.toFile(wavBuffer, 'speech.wav', { type: 'audio/wav' });
+
+    const transcription = await groq.audio.transcriptions.create({
+      file: audioFile,
+      model: "whisper-large-v3",
+      language: "hi", // Hindi + English Accent Detection
+      response_format: "json"
+    });
+
+    const textResult = transcription.text ? transcription.text.trim() : "";
+
+    if (textResult !== "" && esp32Socket && esp32Socket.readyState === WebSocket.OPEN) {
+      console.log("Transcribed Text:", textResult);
+      esp32Socket.send(JSON.stringify({
+        type: "stt_text",
+        text: textResult,
+        is_final: true
+      }));
     }
-  });
-
-  deepgramLive.on(LiveTranscriptionEvents.Close, () => {
-    console.log("🔴 Deepgram Connection Closed.");
-    deepgramLive = null;
-  });
-
-  deepgramLive.on(LiveTranscriptionEvents.Error, (err) => {
-    console.error("⚠️ Deepgram Error:", err);
-  });
+  } catch (err) {
+    console.error("Groq Processing Error:", err.message);
+  } finally {
+    isProcessing = false;
+  }
 }
 
 wss.on('connection', (ws, req) => {
@@ -72,29 +97,29 @@ wss.on('connection', (ws, req) => {
   if (role === 'esp32_stt') {
     console.log("🟢 ESP32 STT Device Connected!");
     esp32Socket = ws;
-
-    // ESP32 connect hote hi Deepgram session start hoga
-    startDeepgramStream();
+    pcmAudioBuffer = [];
 
     ws.on('message', (data, isBinary) => {
-      if (isBinary && deepgramLive && deepgramLive.getReadyState() === 1) {
-        deepgramLive.send(data);
+      if (isBinary) {
+        pcmAudioBuffer.push(data);
+        
+        let currentLength = pcmAudioBuffer.reduce((acc, val) => acc + val.length, 0);
+        if (currentLength >= BUFFER_TARGET_SIZE) {
+          processAudioWithGroq();
+        }
       }
     });
 
     ws.on('close', () => {
       console.log("🔴 ESP32 Disconnected!");
       if (esp32Socket === ws) esp32Socket = null;
-      if (deepgramLive) {
-        deepgramLive.finish();
-        deepgramLive = null;
-      }
+      pcmAudioBuffer = [];
     });
   }
 });
 
 app.get('/', (req, res) => {
-  res.send("<h2>ESP32 Speech-To-Text Relay Server Running 🚀</h2>");
+  res.send("<h2>ESP32 Groq Whisper Relay Server Running 🚀</h2>");
 });
 
 const PORT = process.env.PORT || 10000;
