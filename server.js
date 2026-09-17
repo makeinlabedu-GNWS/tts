@@ -8,7 +8,7 @@ const server = http.createServer(app);
 const wss = new WebSocket.Server({ server });
 
 const SECRET_KEY = "Prakash360";
-const DEEPGRAM_API_KEY = "YOUR_DEEPGRAM_API_KEY_HERE"; 
+const DEEPGRAM_API_KEY = "afc00946e5652af1e454c83466c42efa5bdcfe2d"; 
 
 const deepgram = createClient(DEEPGRAM_API_KEY);
 let deepgramLive = null;
