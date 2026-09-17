@@ -8,16 +8,21 @@ const server = http.createServer(app);
 const wss = new WebSocket.Server({ server });
 
 const SECRET_KEY = "Prakash360";
+
+// Yahan apni wahi copied API Key daalein (Spaces ka dhyan rakhein)
 const DEEPGRAM_API_KEY = "afc00946e5652af1e454c83466c42efa5bdcfe2d"; 
 
 const deepgram = createClient(DEEPGRAM_API_KEY);
+
 let deepgramLive = null;
 let esp32Socket = null;
 
-function setupDeepgram() {
+function startDeepgramStream() {
+  if (deepgramLive) return;
+
   deepgramLive = deepgram.listen.live({
     model: "nova-2",
-    language: "hi-Latn", // Hindi + English mix detection
+    language: "hi-Latn", 
     smart_format: true,
     encoding: "linear16",
     sample_rate: 16000,
@@ -25,7 +30,7 @@ function setupDeepgram() {
   });
 
   deepgramLive.on(LiveTranscriptionEvents.Open, () => {
-    console.log("Deepgram Engine Ready!");
+    console.log("🟢 Deepgram Realtime Engine Ready!");
   });
 
   deepgramLive.on(LiveTranscriptionEvents.Transcript, (data) => {
@@ -43,12 +48,15 @@ function setupDeepgram() {
     }
   });
 
+  deepgramLive.on(LiveTranscriptionEvents.Close, () => {
+    console.log("🔴 Deepgram Connection Closed.");
+    deepgramLive = null;
+  });
+
   deepgramLive.on(LiveTranscriptionEvents.Error, (err) => {
-    console.error("Deepgram Error:", err);
+    console.error("⚠️ Deepgram Error:", err);
   });
 }
-
-setupDeepgram();
 
 wss.on('connection', (ws, req) => {
   const urlParams = new URLSearchParams(req.url.replace('/?', ''));
@@ -62,8 +70,11 @@ wss.on('connection', (ws, req) => {
   }
 
   if (role === 'esp32_stt') {
-    console.log("New ESP32 STT Device Connected!");
+    console.log("🟢 ESP32 STT Device Connected!");
     esp32Socket = ws;
+
+    // ESP32 connect hote hi Deepgram session start hoga
+    startDeepgramStream();
 
     ws.on('message', (data, isBinary) => {
       if (isBinary && deepgramLive && deepgramLive.getReadyState() === 1) {
@@ -72,14 +83,19 @@ wss.on('connection', (ws, req) => {
     });
 
     ws.on('close', () => {
+      console.log("🔴 ESP32 Disconnected!");
       if (esp32Socket === ws) esp32Socket = null;
+      if (deepgramLive) {
+        deepgramLive.finish();
+        deepgramLive = null;
+      }
     });
   }
 });
 
 app.get('/', (req, res) => {
-  res.send("<h2>ESP32 Speech-To-Text Separate Relay Server Active 🚀</h2>");
+  res.send("<h2>ESP32 Speech-To-Text Relay Server Running 🚀</h2>");
 });
 
 const PORT = process.env.PORT || 10000;
-server.listen(PORT, () => console.log('STT Server running on port ' + PORT));
+server.listen(PORT, () => console.log('Server running on port ' + PORT));
