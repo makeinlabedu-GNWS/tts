@@ -10,7 +10,7 @@ const wss = new WebSocket.Server({ server });
 const SECRET_KEY = "Prakash360";
 
 // Yahan apni wahi copied API Key daalein (Spaces ka dhyan rakhein)
-const DEEPGRAM_API_KEY = "afc00946e5652af1e454c83466c42efa5bdcfe2d"; 
+const DEEPGRAM_API_KEY = "afc00946e5652af1e454c83466c42efa5bdcfe2d";
 
 const deepgram = createClient(DEEPGRAM_API_KEY);
 
