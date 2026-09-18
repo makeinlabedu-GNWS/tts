@@ -14,7 +14,8 @@ const groq = new Groq({ apiKey: GROQ_API_KEY });
 
 let esp32Socket = null;
 let pcmAudioBuffer = [];
-const BUFFER_TARGET_SIZE = 48000; // ~1.5 Sec Audio
+// Reduced buffer to 16000 bytes (~0.5 seconds of 16kHz PCM audio) for ultra-fast STT
+const BUFFER_TARGET_SIZE = 16000; 
 let isProcessing = false;
 
 function createWavBuffer(pcmData) {
@@ -53,15 +54,16 @@ async function processAudioWithGroq() {
     const transcription = await groq.audio.transcriptions.create({
       file: audioFile,
       model: "whisper-large-v3",
-      // Prompt ensures text renders in clean Latin alphabet without Devanagari Unicode garbage
-      prompt: "Transcribe the spoken audio strictly in Hinglish or English using Latin script ONLY (e.g. 'Mera naam Prakash hai', 'Hello how are you'). Do NOT output Devanagari script.",
+      temperature: 0.0,
+      // Strong prompt forcing Latin script to stop garbage Unicode rendering on SSD1306
+      prompt: "Output ONLY in Hinglish or English using standard Latin alphabets (e.g., 'Aap kaise ho', 'Mera naam Prakash hai'). Do NOT use Devanagari or special characters.",
       response_format: "json"
     });
 
     const textResult = transcription.text ? transcription.text.trim() : "";
 
     if (textResult !== "" && esp32Socket && esp32Socket.readyState === WebSocket.OPEN) {
-      console.log("Transcribed Text:", textResult);
+      console.log("Instant Text:", textResult);
       esp32Socket.send(JSON.stringify({
         type: "stt_text",
         text: textResult
@@ -86,7 +88,7 @@ wss.on('connection', (ws, req) => {
   }
 
   if (role === 'esp32_stt') {
-    console.log("🟢 ESP32 Smart Device Connected!");
+    console.log("🟢 Fast ESP32 STT Connected!");
     esp32Socket = ws;
     pcmAudioBuffer = [];
 
@@ -109,7 +111,7 @@ wss.on('connection', (ws, req) => {
 });
 
 app.get('/', (req, res) => {
-  res.send("<h2>ESP32 Smart Wearable Assistive Relay Running 🚀</h2>");
+  res.send("<h2>Ultra-Fast ESP32 STT Relay Running 🚀</h2>");
 });
 
 const PORT = process.env.PORT || 10000;
