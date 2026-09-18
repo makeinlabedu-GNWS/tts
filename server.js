@@ -8,46 +8,37 @@ const server = http.createServer(app);
 const wss = new WebSocket.Server({ server });
 
 const SECRET_KEY = "Prakash360";
-// Dynamic Environment Variable (Safe Way)
-const GROQ_API_KEY = process.env.GROQ_API_KEY;
+const GROQ_API_KEY = process.env.GROQ_API_KEY; 
 
 const groq = new Groq({ apiKey: GROQ_API_KEY });
 
 let esp32Socket = null;
 let pcmAudioBuffer = [];
-const BUFFER_TARGET_SIZE = 48000; // ~1.5 Seconds of 16kHz PCM Audio
+const BUFFER_TARGET_SIZE = 48000; // ~1.5 Sec Audio
 let isProcessing = false;
 
-// PCM Data ko Groq-compatible WAV Buffer mein convert karne ka function
 function createWavBuffer(pcmData) {
   const dataLength = pcmData.length;
   const wavBuffer = Buffer.alloc(44 + dataLength);
 
-  // RIFF Header
   wavBuffer.write('RIFF', 0);
   wavBuffer.writeUInt32LE(36 + dataLength, 4);
   wavBuffer.write('WAVE', 8);
-
-  // Subchunk1: fmt (PCM Specification)
   wavBuffer.write('fmt ', 12);
   wavBuffer.writeUInt32LE(16, 16); 
-  wavBuffer.writeUInt16LE(1, 20);  // AudioFormat = 1 (Linear PCM)
-  wavBuffer.writeUInt16LE(1, 22);  // Channels = 1 (Mono)
-  wavBuffer.writeUInt32LE(16000, 24); // Sample Rate = 16000Hz
-  wavBuffer.writeUInt32LE(32000, 28); // Byte Rate (16000 * 1 * 2)
-  wavBuffer.writeUInt16LE(2, 32);  // Block Align
-  wavBuffer.writeUInt16LE(16, 34); // Bits Per Sample = 16
-
-  // Subchunk2: data
+  wavBuffer.writeUInt16LE(1, 20);  
+  wavBuffer.writeUInt16LE(1, 22);  
+  wavBuffer.writeUInt32LE(16000, 24); 
+  wavBuffer.writeUInt32LE(32000, 28); 
+  wavBuffer.writeUInt16LE(2, 32);  
+  wavBuffer.writeUInt16LE(16, 34); 
   wavBuffer.write('data', 36);
   wavBuffer.writeUInt32LE(dataLength, 40);
 
-  // Copy raw PCM audio bytes
   pcmData.copy(wavBuffer, 44);
   return wavBuffer;
 }
 
-// Groq Whisper API Call Handler
 async function processAudioWithGroq() {
   if (pcmAudioBuffer.length === 0 || isProcessing) return;
 
@@ -62,7 +53,8 @@ async function processAudioWithGroq() {
     const transcription = await groq.audio.transcriptions.create({
       file: audioFile,
       model: "whisper-large-v3",
-      language: "hi", // Hindi + English Accent Detection
+      // Prompt ensures text renders in clean Latin alphabet without Devanagari Unicode garbage
+      prompt: "Transcribe the spoken audio strictly in Hinglish or English using Latin script ONLY (e.g. 'Mera naam Prakash hai', 'Hello how are you'). Do NOT output Devanagari script.",
       response_format: "json"
     });
 
@@ -72,8 +64,7 @@ async function processAudioWithGroq() {
       console.log("Transcribed Text:", textResult);
       esp32Socket.send(JSON.stringify({
         type: "stt_text",
-        text: textResult,
-        is_final: true
+        text: textResult
       }));
     }
   } catch (err) {
@@ -95,14 +86,13 @@ wss.on('connection', (ws, req) => {
   }
 
   if (role === 'esp32_stt') {
-    console.log("🟢 ESP32 STT Device Connected!");
+    console.log("🟢 ESP32 Smart Device Connected!");
     esp32Socket = ws;
     pcmAudioBuffer = [];
 
     ws.on('message', (data, isBinary) => {
       if (isBinary) {
         pcmAudioBuffer.push(data);
-        
         let currentLength = pcmAudioBuffer.reduce((acc, val) => acc + val.length, 0);
         if (currentLength >= BUFFER_TARGET_SIZE) {
           processAudioWithGroq();
@@ -119,7 +109,7 @@ wss.on('connection', (ws, req) => {
 });
 
 app.get('/', (req, res) => {
-  res.send("<h2>ESP32 Groq Whisper Relay Server Running 🚀</h2>");
+  res.send("<h2>ESP32 Smart Wearable Assistive Relay Running 🚀</h2>");
 });
 
 const PORT = process.env.PORT || 10000;
