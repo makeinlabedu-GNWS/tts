@@ -14,9 +14,8 @@ const groq = new Groq({ apiKey: GROQ_API_KEY });
 
 let esp32Socket = null;
 let pcmAudioBuffer = [];
-// Reduced buffer to 16000 bytes (~0.5 seconds of 16kHz PCM audio) for ultra-fast STT
-const BUFFER_TARGET_SIZE = 16000; 
 let isProcessing = false;
+let silenceTimer = null;
 
 function createWavBuffer(pcmData) {
   const dataLength = pcmData.length;
@@ -40,8 +39,16 @@ function createWavBuffer(pcmData) {
   return wavBuffer;
 }
 
-async function processAudioWithGroq() {
+// Complete Sentence Transcription Function
+async function processSentence() {
   if (pcmAudioBuffer.length === 0 || isProcessing) return;
+
+  // Bina zaroorat ke bahut chote noise clips ko skip karein (~0.3s filter)
+  const totalLength = pcmAudioBuffer.reduce((acc, val) => acc + val.length, 0);
+  if (totalLength < 9600) { 
+    pcmAudioBuffer = [];
+    return;
+  }
 
   isProcessing = true;
   const rawPcm = Buffer.concat(pcmAudioBuffer);
@@ -55,15 +62,15 @@ async function processAudioWithGroq() {
       file: audioFile,
       model: "whisper-large-v3",
       temperature: 0.0,
-      // Strong prompt forcing Latin script to stop garbage Unicode rendering on SSD1306
-      prompt: "Output ONLY in Hinglish or English using standard Latin alphabets (e.g., 'Aap kaise ho', 'Mera naam Prakash hai'). Do NOT use Devanagari or special characters.",
+      // Strict Prompt for Hinglish Output only
+      prompt: "Transcribe spoken audio ONLY in Hinglish or English using Latin alphabets. Examples: 'Mera naam Prakash hai', 'Kese ho aap', 'Thoda ruko'. Strictly DO NOT output Devanagari script.",
       response_format: "json"
     });
 
     const textResult = transcription.text ? transcription.text.trim() : "";
 
     if (textResult !== "" && esp32Socket && esp32Socket.readyState === WebSocket.OPEN) {
-      console.log("Instant Text:", textResult);
+      console.log("Full Sentence:", textResult);
       esp32Socket.send(JSON.stringify({
         type: "stt_text",
         text: textResult
@@ -88,30 +95,35 @@ wss.on('connection', (ws, req) => {
   }
 
   if (role === 'esp32_stt') {
-    console.log("🟢 Fast ESP32 STT Connected!");
+    console.log("🟢 Smooth Smart STT Device Connected!");
     esp32Socket = ws;
     pcmAudioBuffer = [];
 
     ws.on('message', (data, isBinary) => {
       if (isBinary) {
         pcmAudioBuffer.push(data);
-        let currentLength = pcmAudioBuffer.reduce((acc, val) => acc + val.length, 0);
-        if (currentLength >= BUFFER_TARGET_SIZE) {
-          processAudioWithGroq();
-        }
+
+        // Jab tak audio aa raha hai, timer reset hoga
+        if (silenceTimer) clearTimeout(silenceTimer);
+
+        // 450ms (0.45 second) ka silence milte hi lagta hai sentence poora hua -> trigger process
+        silenceTimer = setTimeout(() => {
+          processSentence();
+        }, 450);
       }
     });
 
     ws.on('close', () => {
       console.log("🔴 ESP32 Disconnected!");
       if (esp32Socket === ws) esp32Socket = null;
+      if (silenceTimer) clearTimeout(silenceTimer);
       pcmAudioBuffer = [];
     });
   }
 });
 
 app.get('/', (req, res) => {
-  res.send("<h2>Ultra-Fast ESP32 STT Relay Running 🚀</h2>");
+  res.send("<h2>Smooth Sentence-Based Assistive Relay Active 🚀</h2>");
 });
 
 const PORT = process.env.PORT || 10000;
