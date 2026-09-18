@@ -17,6 +17,12 @@ let pcmAudioBuffer = [];
 let isProcessing = false;
 let silenceTimer = null;
 
+// Common Whisper Hallucinations Filter List
+const IGNORED_PHRASES = [
+  "subtitles", "amara.org", "community", "thank you", 
+  "watching", "subscribe", "mbc", "copyright", "bye"
+];
+
 function createWavBuffer(pcmData) {
   const dataLength = pcmData.length;
   const wavBuffer = Buffer.alloc(44 + dataLength);
@@ -39,13 +45,12 @@ function createWavBuffer(pcmData) {
   return wavBuffer;
 }
 
-// Complete Sentence Transcription Function
 async function processSentence() {
   if (pcmAudioBuffer.length === 0 || isProcessing) return;
 
-  // Bina zaroorat ke bahut chote noise clips ko skip karein (~0.3s filter)
   const totalLength = pcmAudioBuffer.reduce((acc, val) => acc + val.length, 0);
-  if (totalLength < 9600) { 
+  // Ignore audio buffers shorter than 0.4 seconds
+  if (totalLength < 12800) { 
     pcmAudioBuffer = [];
     return;
   }
@@ -62,15 +67,19 @@ async function processSentence() {
       file: audioFile,
       model: "whisper-large-v3",
       temperature: 0.0,
-      // Strict Prompt for Hinglish Output only
-      prompt: "Transcribe spoken audio ONLY in Hinglish or English using Latin alphabets. Examples: 'Mera naam Prakash hai', 'Kese ho aap', 'Thoda ruko'. Strictly DO NOT output Devanagari script.",
+      // Strict instruction: NO translation, NO Devanagari Unicode, preserve English words as-is
+      prompt: "Transcribe exact spoken sounds using Latin alphabet only. Hindi words into Hinglish (e.g. 'Aap kya kar rahe ho'), English words in pure English (e.g. 'How are you system'). Do NOT translate. Do NOT use Devanagari.",
       response_format: "json"
     });
 
-    const textResult = transcription.text ? transcription.text.trim() : "";
+    let textResult = transcription.text ? transcription.text.trim() : "";
+    let lowerText = textResult.toLowerCase();
 
-    if (textResult !== "" && esp32Socket && esp32Socket.readyState === WebSocket.OPEN) {
-      console.log("Full Sentence:", textResult);
+    // Check if output contains unwanted subtitle hallucination
+    let isHallucination = IGNORED_PHRASES.some(phrase => lowerText.includes(phrase));
+
+    if (textResult !== "" && !isHallucination && esp32Socket && esp32Socket.readyState === WebSocket.OPEN) {
+      console.log("Verified Speech:", textResult);
       esp32Socket.send(JSON.stringify({
         type: "stt_text",
         text: textResult
@@ -95,7 +104,7 @@ wss.on('connection', (ws, req) => {
   }
 
   if (role === 'esp32_stt') {
-    console.log("🟢 Smooth Smart STT Device Connected!");
+    console.log("🟢 Turn-Taking STT Active!");
     esp32Socket = ws;
     pcmAudioBuffer = [];
 
@@ -103,13 +112,11 @@ wss.on('connection', (ws, req) => {
       if (isBinary) {
         pcmAudioBuffer.push(data);
 
-        // Jab tak audio aa raha hai, timer reset hoga
         if (silenceTimer) clearTimeout(silenceTimer);
-
-        // 450ms (0.45 second) ka silence milte hi lagta hai sentence poora hua -> trigger process
+        // Pause threshold: 400ms silence marks end of sentence
         silenceTimer = setTimeout(() => {
           processSentence();
-        }, 450);
+        }, 400);
       }
     });
 
@@ -123,7 +130,7 @@ wss.on('connection', (ws, req) => {
 });
 
 app.get('/', (req, res) => {
-  res.send("<h2>Smooth Sentence-Based Assistive Relay Active 🚀</h2>");
+  res.send("<h2>Native Phonetic Hinglish Assistive Server Running 🚀</h2>");
 });
 
 const PORT = process.env.PORT || 10000;
